@@ -23,7 +23,7 @@ public class NodeLauncher {
     public static void main(String[] args) {
         int index = Integer.parseInt(args[0]);
         try {
-            new Node(index, loadConfig()).start();
+            new Node(index, loadConfig()).start(false);
         } catch (Exception ex) {
             logger.severe("Bad config " + ex);
         }

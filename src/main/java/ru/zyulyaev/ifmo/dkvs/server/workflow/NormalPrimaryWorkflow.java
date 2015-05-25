@@ -4,6 +4,8 @@ import ru.zyulyaev.ifmo.dkvs.MessageFormatter;
 import ru.zyulyaev.ifmo.dkvs.message.normal.CommitMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.PrepareMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.PrepareOkMessage;
+import ru.zyulyaev.ifmo.dkvs.message.recovery.RecoveryMessage;
+import ru.zyulyaev.ifmo.dkvs.message.recovery.RecoveryResponseMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.DeleteRequestMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.GetRequestMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.RequestMessage;
@@ -24,6 +26,8 @@ public class NormalPrimaryWorkflow extends BaseNormalWorkflow {
 
     public NormalPrimaryWorkflow(WorkflowContext context) {
         super(context);
+        for (int i = context.getCommitNumber(); i < context.getOpNumber(); ++i)
+            oksReceived.put(i, 0);
     }
 
     @MessageProcessor({GetRequestMessage.class, SetRequestMessage.class, DeleteRequestMessage.class})
@@ -62,6 +66,18 @@ public class NormalPrimaryWorkflow extends BaseNormalWorkflow {
             oksReceived.remove(context.getCommitNumber());
             context.commit();
         }
+    }
+
+    @MessageProcessor(RecoveryMessage.class)
+    private void processRecovery(RecoveryMessage recoveryMessage, RemoteNode node) {
+        node.sendMessage(new RecoveryResponseMessage(
+                context.getViewNumber(),
+                recoveryMessage.getNonce(),
+                MessageFormatter.formatLog(context.getLog()),
+                context.getOpNumber(),
+                context.getCommitNumber(),
+                context.getNodeIndex()
+        ));
     }
 
     @Override

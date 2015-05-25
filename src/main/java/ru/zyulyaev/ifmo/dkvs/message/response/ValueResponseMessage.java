@@ -1,23 +1,23 @@
 package ru.zyulyaev.ifmo.dkvs.message.response;
 
 import ru.zyulyaev.ifmo.dkvs.message.MessageParam;
-import ru.zyulyaev.ifmo.dkvs.message.Message;
 import ru.zyulyaev.ifmo.dkvs.message.MessageType;
 
 /**
  * Created by nikita on 22.05.15.
  */
 @MessageType("value")
-public class ValueResponseMessage extends Message {
-    @MessageParam(1)
+public class ValueResponseMessage extends ResponseMessage {
+    @MessageParam(3)
     private String key;
-    @MessageParam(2)
+    @MessageParam(4)
     private String value;
 
     ValueResponseMessage() {
     }
 
-    public ValueResponseMessage(String key, String value) {
+    public ValueResponseMessage(int requestId, int viewNumber, String key, String value) {
+        super(requestId, viewNumber);
         this.key = key;
         this.value = value;
     }

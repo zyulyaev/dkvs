@@ -42,4 +42,7 @@ public interface WorkflowContext {
     void commit();
 
     int getIdleTimeout();
+
+    // todo for debug purposes only
+    void die();
 }

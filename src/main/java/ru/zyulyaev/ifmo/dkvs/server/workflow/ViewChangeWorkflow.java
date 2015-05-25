@@ -15,14 +15,15 @@ import java.util.List;
 /**
  * Created by nikita on 23.05.15.
  */
-public class StartViewChangeWorkflow extends Workflow {
+public class ViewChangeWorkflow extends Workflow {
     private final int lastNormalViewNumber;
     private final List<DoViewChangeMessage> doViewChangeMessages = new ArrayList<>();
     private int sameViewChangeRequests;
 
-    public StartViewChangeWorkflow(WorkflowContext context, int lastNormalViewNumber) {
+    public ViewChangeWorkflow(WorkflowContext context, int lastNormalViewNumber, boolean byRequest) {
         super(context);
         this.lastNormalViewNumber = lastNormalViewNumber;
+        this.sameViewChangeRequests = byRequest ? 1 : 0;
     }
 
     @Override
@@ -52,7 +53,7 @@ public class StartViewChangeWorkflow extends Workflow {
                 }
             }
         } else if (requestViewNumber > context.getViewNumber()) {
-            startViewChange(requestViewNumber, lastNormalViewNumber);
+            startViewChange(requestViewNumber, lastNormalViewNumber, true);
         }
     }
 
@@ -82,7 +83,7 @@ public class StartViewChangeWorkflow extends Workflow {
                 context.switchWorkflow(new NormalPrimaryWorkflow(context));
             }
         } else if (message.getViewNumber() > context.getViewNumber()) {
-            startViewChange(message.getViewNumber(), lastNormalViewNumber);
+            startViewChange(message.getViewNumber(), lastNormalViewNumber, true);
         }
     }
 
@@ -107,6 +108,6 @@ public class StartViewChangeWorkflow extends Workflow {
     }
 
     private void onViewChangeFailed() {
-        startViewChange(context.getViewNumber() + 1, lastNormalViewNumber);
+        startViewChange(context.getViewNumber() + 1, lastNormalViewNumber, false);
     }
 }

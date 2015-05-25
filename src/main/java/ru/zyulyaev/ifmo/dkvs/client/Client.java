@@ -3,13 +3,13 @@ package ru.zyulyaev.ifmo.dkvs.client;
 import ru.zyulyaev.ifmo.dkvs.DkvsConfig;
 import ru.zyulyaev.ifmo.dkvs.MessageFormatter;
 import ru.zyulyaev.ifmo.dkvs.message.Message;
+import ru.zyulyaev.ifmo.dkvs.message.debug.DieMessage;
+import ru.zyulyaev.ifmo.dkvs.message.debug.SleepMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.DeleteRequestMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.GetRequestMessage;
+import ru.zyulyaev.ifmo.dkvs.message.request.RequestMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.SetRequestMessage;
-import ru.zyulyaev.ifmo.dkvs.message.response.DeletedResponseMessage;
-import ru.zyulyaev.ifmo.dkvs.message.response.NotFoundResponseMessage;
-import ru.zyulyaev.ifmo.dkvs.message.response.StoredResponseMessage;
-import ru.zyulyaev.ifmo.dkvs.message.response.ValueResponseMessage;
+import ru.zyulyaev.ifmo.dkvs.message.response.*;
 import ru.zyulyaev.ifmo.dkvs.shared.BoundChannel;
 import ru.zyulyaev.ifmo.dkvs.shared.SocketChannelProcessor;
 
@@ -18,6 +18,7 @@ import java.io.IOException;
 import java.net.SocketAddress;
 import java.nio.channels.SelectionKey;
 import java.nio.channels.Selector;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -34,13 +35,14 @@ public class Client implements Closeable {
             .register(ValueResponseMessage.class)
             .build();
 
+    private final Set<Integer> disconnected = new HashSet<>();
     private final int clientId;
     private final DkvsConfig config;
     private final List<RemoteReplica> replicas;
     private final Selector selector;
     private int viewNumber = 0;
-    private int requestId = 0;
-    private Message lastMessage;
+    private int nextRequestId = 0;
+    private ResponseMessage lastMessage;
 
     public Client(int clientId, DkvsConfig config) throws IOException {
         this.clientId = clientId;
@@ -50,9 +52,13 @@ public class Client implements Closeable {
                 .collect(Collectors.toList());
         selector = Selector.open();
         for (int i = 0; i < getNodesCount(); ++i) {
-            SocketAddress address = this.config.getNodeAddresses().get(i);
-            replicas.get(i).setOutbound(new BoundChannel(address, selector, () -> {}));
+            connectNode(i);
         }
+    }
+
+    private void connectNode(int nodeIndex) throws IOException {
+        SocketAddress address = config.getNodeAddresses().get(nodeIndex);
+        replicas.get(nodeIndex).setOutbound(new BoundChannel(address, selector, () -> disconnected.add(nodeIndex)));
     }
 
     private int getNodesCount() {
@@ -63,30 +69,35 @@ public class Client implements Closeable {
         return viewNumber % getNodesCount();
     }
 
-    private Message sendPrimaryAndWait(Message message) throws IOException {
+    private ResponseMessage sendPrimaryAndWait(RequestMessage message) throws IOException {
         replicas.get(getPrimaryIndex()).sendMessage(message);
-        return waitMessage();
+        return waitMessage(message.getRequestId());
     }
 
-    private Message sendAllAndWait(Message message) throws IOException {
+    private ResponseMessage sendAllAndWait(RequestMessage message) throws IOException {
         replicas.forEach(r -> r.sendMessage(message));
-        return waitMessage();
+        return waitMessage(message.getRequestId());
     }
 
-    private Message sendAndWait(Message request) throws IOException {
-        Message response = sendPrimaryAndWait(request);
-        while (response == null) {
+    private void sendOne(int nodeIndex, Message message) {
+        replicas.get(nodeIndex).sendMessage(message);
+    }
+
+    private ResponseMessage sendAndWait(RequestMessage request) throws IOException {
+        ResponseMessage response = sendPrimaryAndWait(request);
+        while (response == null || response.getRequestId() != request.getRequestId()) {
             response = sendAllAndWait(request);
         }
+        viewNumber = response.getViewNumber();
         return response;
     }
 
     public void set(String key, String value) throws IOException {
-        sendAndWait(new SetRequestMessage(clientId, requestId++, key, value));
+        sendAndWait(new SetRequestMessage(clientId, nextRequestId++, key, value));
     }
 
     public String get(String key) throws IOException {
-        Message response = sendAndWait(new GetRequestMessage(clientId, requestId++, key));
+        Message response = sendAndWait(new GetRequestMessage(clientId, nextRequestId++, key));
         if (response instanceof ValueResponseMessage)
             return ((ValueResponseMessage) response).getValue();
         else
@@ -94,11 +105,21 @@ public class Client implements Closeable {
     }
 
     public boolean delete(String key) throws IOException {
-        return sendAndWait(new DeleteRequestMessage(clientId, requestId++, key)) instanceof DeletedResponseMessage;
+        return sendAndWait(new DeleteRequestMessage(clientId, nextRequestId++, key)) instanceof DeletedResponseMessage;
     }
 
-    private Message waitMessage() throws IOException {
-        lastMessage = null;
+    public void sendSleep(int nodeIndex, int timeout) {
+        sendOne(nodeIndex, new SleepMessage(timeout));
+    }
+
+    public void sendDie(int nodeIndex) {
+        sendOne(nodeIndex, new DieMessage());
+    }
+
+    private ResponseMessage waitMessage(int requestId) throws IOException {
+        for (int nodeIndex : disconnected)
+            connectNode(nodeIndex);
+        disconnected.clear();
         while (selector.select(config.getTimeout()) != 0) {
             Set<SelectionKey> keys = selector.selectedKeys();
             for (SelectionKey key : keys) {
@@ -106,14 +127,16 @@ public class Client implements Closeable {
                 processor.process(key);
             }
             keys.clear();
-            if (lastMessage != null)
+            if (lastMessage != null && lastMessage.getRequestId() == requestId)
                 return lastMessage;
         }
         return lastMessage;
     }
 
     private void processMessage(String message, RemoteReplica replica) {
-        lastMessage = formatter.parse(message);
+        ResponseMessage incoming = (ResponseMessage) formatter.parse(message);
+        if (lastMessage == null || incoming.getRequestId() > lastMessage.getRequestId())
+            lastMessage = incoming;
     }
 
     @Override

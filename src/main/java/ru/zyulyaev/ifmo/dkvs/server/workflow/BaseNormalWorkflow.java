@@ -21,6 +21,6 @@ public class BaseNormalWorkflow extends Workflow {
     private void processStartViewChange(StartViewChangeMessage message, RemoteNode node) {
         int requestViewNumber = message.getViewNumber();
         if (requestViewNumber > context.getViewNumber())
-            startViewChange(requestViewNumber, context.getViewNumber());
+            startViewChange(requestViewNumber, context.getViewNumber(), true);
     }
 }

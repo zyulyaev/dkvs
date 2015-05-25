@@ -3,6 +3,8 @@ package ru.zyulyaev.ifmo.dkvs.server.workflow;
 import ru.zyulyaev.ifmo.dkvs.MessageFormatter;
 import ru.zyulyaev.ifmo.dkvs.MessageRouter;
 import ru.zyulyaev.ifmo.dkvs.message.Message;
+import ru.zyulyaev.ifmo.dkvs.message.debug.DieMessage;
+import ru.zyulyaev.ifmo.dkvs.message.debug.SleepMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.AcceptMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.NodeMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.PrepareMessage;
@@ -104,18 +106,20 @@ public abstract class Workflow {
 
     public abstract NodeStatus getStatus();
 
-    protected final void startViewChange(int viewNumber, int lastNormalViewNumber) {
+    protected final void startViewChange(int viewNumber, int lastNormalViewNumber, boolean byRequest) {
         context.setViewNumber(viewNumber);
         context.sendMessageToOtherNodes(new StartViewChangeMessage(viewNumber, context.getNodeIndex()));
-        context.switchWorkflow(new StartViewChangeWorkflow(context, lastNormalViewNumber));
+        context.switchWorkflow(new ViewChangeWorkflow(context, lastNormalViewNumber, byRequest));
     }
 
     private static String generateNonce() {
         return new BigInteger(128, ThreadLocalRandom.current()).toString(36);
     }
 
-    protected final void startRecovery() {
-        context.sendMessageToOtherNodes(new RecoveryMessage(context.getNodeIndex(), generateNonce()));
+    public final void startRecovery() {
+        String nonce = generateNonce();
+        context.sendMessageToOtherNodes(new RecoveryMessage(context.getNodeIndex(), nonce));
+        context.switchWorkflow(new RecoveryWorkflow(context, nonce));
     }
 
     protected Message parseMessage(String message) {
@@ -157,6 +161,20 @@ public abstract class Workflow {
     @MessageProcessor(AcceptMessage.class)
     private void processAccept(AcceptMessage message, Remote remote) {
         logger.info("Node #" + context.getNodeIndex() + " is accepted");
+    }
+
+    @MessageProcessor(SleepMessage.class)
+    private void processSleep(SleepMessage message, RemoteClient client) {
+        try {
+            Thread.sleep(message.getTimeout());
+        } catch (InterruptedException e) {
+            logger.log(Level.SEVERE, "interrupted while asleep", e);
+        }
+    }
+
+    @MessageProcessor(DieMessage.class)
+    private void processDie(DieMessage message, RemoteClient client) {
+        context.die();
     }
 
     protected static class TimerTask {

@@ -2,6 +2,7 @@ package ru.zyulyaev.ifmo.dkvs.shared;
 
 import java.io.Closeable;
 import java.io.IOException;
+import java.net.ConnectException;
 import java.net.SocketAddress;
 import java.nio.ByteBuffer;
 import java.nio.channels.SelectionKey;
@@ -48,7 +49,8 @@ public final class BoundChannel implements SocketChannelProcessor, Closeable {
     public void sendMessage(String message) {
         logger.info("Message '" + message + "' added to queue");
         outMessages.add(ByteBuffer.wrap(message.concat("\n").getBytes(CHARSET)));
-        key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
+        if (key.isValid())
+            key.interestOps(key.interestOps() | SelectionKey.OP_WRITE);
     }
 
     public void setMessageProcessor(Consumer<String> messageProcessor) {
@@ -63,42 +65,49 @@ public final class BoundChannel implements SocketChannelProcessor, Closeable {
     public void process(SelectionKey key) throws IOException {
         if (key != this.key)
             throw new IllegalStateException("Not my key!");
+        if (key.isConnectable() && !processConnect()) {
+            return;
+        }
+        if (key.isReadable() && !processRead()) {
+            return;
+        }
         if (key.isWritable()) {
             processWrite();
         }
-        if (key.isConnectable()) {
-            processConnect();
-        }
-        if (key.isReadable()) {
-            processRead();
-        }
     }
 
-    private void processConnect() throws IOException {
+    private boolean processConnect() throws IOException {
         logger.info("Finishing connection with " + channel.getRemoteAddress());
-        channel.finishConnect();
-        key.interestOps(key.interestOps() & ~SelectionKey.OP_CONNECT);
+        try {
+            channel.finishConnect();
+            key.interestOps(key.interestOps() & ~SelectionKey.OP_CONNECT);
+            return true;
+        } catch (ConnectException ex) {
+            onDisconnect();
+            return false;
+        }
     }
 
-    private void processRead() throws IOException {
+    private boolean processRead() throws IOException {
         int rd;
         do {
             inBuffer.rewind();
             rd = channel.read(inBuffer);
             if (rd == -1) {
                 onDisconnect();
-                return;
+                return false;
             }
             inMessages.append(new String(inBuffer.array(), 0, rd, CHARSET));
 
             int nl;
             while ((nl = inMessages.indexOf("\n")) != -1) {
-                String message = inMessages.substring(0, nl).trim();
+                String message = inMessages.substring(0, nl);
                 inMessages.delete(0, nl + 1);
                 logger.info("Processing message from " + channel.getRemoteAddress() + ": " + message);
                 messageProcessor.accept(message);
             }
         } while (rd != 0);
+        return true;
     }
 
     private void onDisconnect() {

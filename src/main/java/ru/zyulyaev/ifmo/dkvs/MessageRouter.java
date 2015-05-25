@@ -34,7 +34,7 @@ public class MessageRouter<C> {
         try {
             dispatch(formatter.parse(message), context);
         } catch (RuntimeException ex) {
-            logger.log(Level.WARNING, ex.getMessage(), ex);
+            logger.log(Level.WARNING, ex.getMessage());
         }
     }
 

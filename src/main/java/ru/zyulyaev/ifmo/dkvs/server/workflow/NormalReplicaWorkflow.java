@@ -3,6 +3,8 @@ package ru.zyulyaev.ifmo.dkvs.server.workflow;
 import ru.zyulyaev.ifmo.dkvs.message.normal.CommitMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.PrepareMessage;
 import ru.zyulyaev.ifmo.dkvs.message.normal.PrepareOkMessage;
+import ru.zyulyaev.ifmo.dkvs.message.recovery.RecoveryMessage;
+import ru.zyulyaev.ifmo.dkvs.message.recovery.RecoveryResponseMessage;
 import ru.zyulyaev.ifmo.dkvs.message.request.RequestMessage;
 import ru.zyulyaev.ifmo.dkvs.server.RemoteNode;
 
@@ -36,10 +38,15 @@ public class NormalReplicaWorkflow extends BaseNormalWorkflow {
 
     @MessageProcessor(CommitMessage.class)
     private void processCommitMessage(CommitMessage commitMessage, RemoteNode node) {
-        if (commitMessage.getViewNumber() != context.getCommitNumber())
+        if (commitMessage.getViewNumber() != context.getViewNumber())
             return;
         updateCommitNumber(commitMessage.getCommitNumber());
         primaryIdleTask.reset();
+    }
+
+    @MessageProcessor(RecoveryMessage.class)
+    private void processRecovery(RecoveryMessage recoveryMessage, RemoteNode node) {
+        node.sendMessage(new RecoveryResponseMessage(context.getViewNumber(), recoveryMessage.getNonce(), "null", 0, 0, context.getNodeIndex()));
     }
 
     private void updateCommitNumber(int commitNumber) {
@@ -55,6 +62,6 @@ public class NormalReplicaWorkflow extends BaseNormalWorkflow {
     }
 
     private void primaryIdle() {
-        startViewChange(context.getViewNumber() + 1, context.getViewNumber());
+        startViewChange(context.getViewNumber() + 1, context.getViewNumber(), false);
     }
 }

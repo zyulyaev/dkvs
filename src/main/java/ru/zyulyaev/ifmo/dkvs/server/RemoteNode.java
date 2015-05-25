@@ -42,4 +42,20 @@ public class RemoteNode extends Remote {
     protected void processIncomingMessage(String message) {
         messageProcessor.process(message, this);
     }
+
+    @Override
+    public void close() throws IOException {
+        try {
+            super.close();
+        } catch (IOException a) {
+            try {
+                inbound.close();
+            } catch (IOException b) {
+                b.addSuppressed(a);
+                throw b;
+            }
+            throw a;
+        }
+        inbound.close();
+    }
 }

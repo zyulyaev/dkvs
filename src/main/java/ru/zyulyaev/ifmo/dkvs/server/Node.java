@@ -85,47 +85,53 @@ public class Node {
         return getPrimaryIndex() == nodeIndex;
     }
 
-    public void start() throws IOException {
+    public void start(boolean recovery) throws IOException {
         if (!status.compareAndSet(NodeStatus.CREATED, NodeStatus.INITIALIZING))
             throw new IllegalStateException("Node #" + nodeIndex + " already has status " + getStatus());
 
         SocketAddress address = getAddress();
         logger.info("Initializing node #" + nodeIndex + " at " + address);
-        Selector selector = Selector.open();
-        initServerSocket(selector, address);
-        initNodes(selector);
-        loadLog();
-        initWorkflow();
+        try (Selector selector = Selector.open();
+             ServerSocketChannel serverSocket = initServerSocket(selector, address)) {
+            initNodes(selector);
+            initWorkflow();
 
-        if (!status.compareAndSet(NodeStatus.INITIALIZING, NodeStatus.NORMAL)) {
-            throw new IllegalStateException("Something when wrong");
-        }
-
-        while (true) {
-            for (int disconnected : disconnectedNodes)
-                connectNode(disconnected, selector);
-            disconnectedNodes.clear();
-            int selected = selector.select(TICK_TIMEOUT);
-            if (status.get() == NodeStatus.STOPPED || Thread.interrupted())
-                break;
-            if (selected != 0) {
-                Set<SelectionKey> keys = selector.selectedKeys();
-                for (SelectionKey key : keys) {
-                    SocketChannelProcessor processor = (SocketChannelProcessor) key.attachment();
-                    processor.process(key);
-                }
-                keys.clear();
+            if (!status.compareAndSet(NodeStatus.INITIALIZING, currentWorkflow.getStatus())) {
+                throw new IllegalStateException("Something when wrong");
             }
-            tick();
+
+            if (recovery)
+                currentWorkflow.startRecovery();
+
+            while (true) {
+                for (int disconnected : disconnectedNodes)
+                    connectNode(disconnected, selector);
+                disconnectedNodes.clear();
+                int selected = selector.select(TICK_TIMEOUT);
+                if (status.get() == NodeStatus.STOPPED || Thread.interrupted())
+                    break;
+                if (selected != 0) {
+                    Set<SelectionKey> keys = selector.selectedKeys();
+                    for (SelectionKey key : keys) {
+                        SocketChannelProcessor processor = (SocketChannelProcessor) key.attachment();
+                        processor.process(key);
+                    }
+                    keys.clear();
+                }
+                tick();
+            }
+        } finally {
+            for (RemoteNode node : nodes)
+                if (node.getIndex() != nodeIndex)
+                    node.close();
+            for (ClientTableEntry entry : clientTable.values())
+                if (entry.getRemoteClient() != null)
+                    entry.getRemoteClient().close();
         }
     }
 
     private void tick() {
         currentWorkflow.tick();
-    }
-
-    private void loadLog() {
-
     }
 
     private void initWorkflow() {
@@ -154,18 +160,20 @@ public class Node {
         node.sendMessage(new NodeMessage(nodeIndex));
     }
 
-    private void initServerSocket(Selector selector, SocketAddress address) throws IOException {
+    private ServerSocketChannel initServerSocket(Selector selector, SocketAddress address) throws IOException {
         ServerSocketChannel serverSocket = ServerSocketChannel.open();
         serverSocket.bind(address);
         serverSocket.configureBlocking(false);
         serverSocket.register(selector, SelectionKey.OP_ACCEPT, (SocketChannelProcessor) this::acceptClient);
+        return serverSocket;
     }
 
     private void acceptClient(SelectionKey key) throws IOException {
         RemoteClient client = new RemoteClient(this::processClientMessage);
         ServerSocketChannel channel = (ServerSocketChannel) key.channel();
         SocketChannel clientChannel = channel.accept();
-        client.setOutbound(new BoundChannel(clientChannel, key.selector(), () -> {}));
+        client.setOutbound(new BoundChannel(clientChannel, key.selector(), () -> {
+        }));
         logger.info("Accepting connection from " + clientChannel.getRemoteAddress());
     }
 
@@ -202,26 +210,28 @@ public class Node {
     }
 
     private void applyGet(GetRequestMessage getMessage, Void ctx) {
+        int requestId = getMessage.getRequestId();
         String key = getMessage.getKey();
         String value = storage.get(key);
         if (value == null) {
-            respondClient(getMessage, new NotFoundResponseMessage());
+            respondClient(getMessage, new NotFoundResponseMessage(requestId, viewNumber));
         } else {
-            respondClient(getMessage, new ValueResponseMessage(key, value));
+            respondClient(getMessage, new ValueResponseMessage(requestId, viewNumber, key, value));
         }
     }
 
     private void applySet(SetRequestMessage setMessage, Void ctx) {
         storage.put(setMessage.getKey(), setMessage.getValue());
-        respondClient(setMessage, new StoredResponseMessage());
+        respondClient(setMessage, new StoredResponseMessage(setMessage.getRequestId(), viewNumber));
     }
 
     private void applyDelete(DeleteRequestMessage deleteMessage, Void ctx) {
+        int requestId = deleteMessage.getRequestId();
         boolean existed = storage.remove(deleteMessage.getKey()) != null;
         if (existed) {
-            respondClient(deleteMessage, new DeletedResponseMessage());
+            respondClient(deleteMessage, new DeletedResponseMessage(requestId, viewNumber));
         } else {
-            respondClient(deleteMessage, new NotFoundResponseMessage());
+            respondClient(deleteMessage, new NotFoundResponseMessage(requestId, viewNumber));
         }
     }
 
@@ -313,6 +323,11 @@ public class Node {
         @Override
         public int getIdleTimeout() {
             return config.getTimeout();
+        }
+
+        @Override
+        public void die() {
+            status.set(NodeStatus.STOPPED);
         }
     }
 }

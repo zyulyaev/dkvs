@@ -58,13 +58,17 @@ public class MessageFormatter {
                 .peek(f -> f.setAccessible(true));
     }
 
+    private static String escapeString(String value) {
+        return value.replaceAll("([ \\\\])", "\\\\$1");
+    }
+
     public static String format(Message message) {
         return Stream.concat(
                 Stream.of(message.getType()),
                 getArgFields(message.getClass())
                         .map(f -> {
                             try {
-                                return f.get(message).toString().replaceAll("([ \\\\])", "\\\\$1");
+                                return escapeString(f.get(message).toString());
                             } catch (IllegalAccessException e) {
                                 logger.log(Level.SEVERE, "Something went wrong", e);
                                 return "NaN";
@@ -76,7 +80,7 @@ public class MessageFormatter {
 
     public static String formatLog(RequestLog log) {
         return Stream.of(log.getEntries())
-                .map(message -> message == null ? "null" : format(message))
+                .map(message -> message == null ? "null" : escapeString(format(message)))
                 .collect(Collectors.joining(" "));
     }
 
